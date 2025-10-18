@@ -1,0 +1,118 @@
+
+|                        🧩 DESIGN PRINCIPLES & PATTERNS — FILE ENCRYPTION TOOL                |
+|                                                                                              |
+| Project purpose: Console utility to generate an AES-256 secret key, encrypt files, and       |
+| decrypt files using that key. Works with binary files; key stored in `secret.key`.           |
++----------------------------------------------------------------------------------------------+
+| ✅ Core Feature → Method mapping (verified)                                                  |
+|  • Generate Key         -> generateKey()                                                     |
+|  • Encrypt File         -> encryptFile(inputFile, outputFile)                                |
+|  • Decrypt File         -> decryptFile(inputFile, outputFile)                                |
+|  • Menu routing & I/O   -> main(), userChoice()                                              |
+|  • Key storage file     -> KEY_FILE path used by generate/encrypt/decrypt                    |
++----------------------------------------------------------------------------------------------+
+| ✅ KISS                                                                                      |
+|  • CLI + small focused methods: generateKey, encryptFile, decryptFile, userChoice. Good.     |
++----------------------------------------------------------------------------------------------+
+| ✅ DRY                                                                                       |
+|  • Key loading / file I/O patterns are conceptually re-used (but see Improvement 1).         |
++----------------------------------------------------------------------------------------------+
+| ⚠️ SRP (Single Responsibility Principle)                                                     |
+|  • Methods are single-purpose.                                                               |
+|  • (⚠️) Class-level SRP: code mixes CLI, crypto, and file I/O — extract CryptoUtil + IO.     |
++----------------------------------------------------------------------------------------------+
+| ⚠️ Encapsulation                                                                             |
+|  • KEY_FILE constants used directly; consider hiding key handling in a KeyManager class.     |
++----------------------------------------------------------------------------------------------+
+| ❌ Security/Correctness caveats (must-fix items)                                             |
+| 1) **AES mode/IV**: `Cipher.getInstance("AES")` is ambiguous and typically uses ECB mode —   |
+|    ECB is insecure for real data. Use an authenticated mode like AES/GCM (e.g.               |
+|    "AES/GCM/NoPadding") or AES/CBC with a random IV stored alongside ciphertext.             |
+| 2) **Authentication**: Use AEAD (GCM) to prevent tampering — AES-GCM gives confidentiality + |
+|    integrity.                                                                                |
+| 3) **Key storage**: writing raw key bytes to `secret.key` unprotected is risky — at least    |
+|    restrict file permissions and consider wrapping key with platform keystore or deriving    |
+|    from a password via PBKDF2 if user passphrase is desired.                                 |
+| 4) **Error handling & leaks**: current code prints generic errors and may swallow causes.    |
+|    Log or inspect exceptions during development; present user-friendly messages in prod.     |
+| 5) **Cipher & block-size**: for large files, prefer streaming (CipherInputStream/CipherOutputStream) |
+|    instead of reading entire file into memory (Files.readAllBytes) to avoid OOM.             |
++----------------------------------------------------------------------------------------------+
+| 🟡 Suggested Patterns & Refactors                                                            |
+|  • KeyManager class: generate/load/save key, set secure file permissions.                    |
+|  • CryptoService: encrypt(File in, File out, Key) / decrypt(File in, File out, Key).         |
+|  • IO utilities: safe stream open/close using try-with-resources.                            |
+|  • Use Strategy: support AES-GCM vs AES-CBC modes selectable at runtime.                     |
++----------------------------------------------------------------------------------------------+
+| ✅ Testability & Maintainability                                                             |
+|  • Crypto methods are small and can be unit-tested by calling encrypt→decrypt round trips.   |
+|  • Make key path configurable (env var / CLI arg) to test with temporary directories.        |
++----------------------------------------------------------------------------------------------+
+| Quick mapping — Feature → security note                                                      |
+|  • Key generation -> generateKey()  — ensure file perms; use secure RNG.                     |
+|  • Encryption     -> encryptFile()  — use AEAD/IV and stream I/O.                            |
+|  • Decryption     -> decryptFile()  — verify authenticity before writing to disk.            |
++----------------------------------------------------------------------------------------------+
+| Prioritized action list (security first)                                                     |
+| 1) Switch to AES-GCM (`Cipher.getInstance("AES/GCM/NoPadding")`) with a random 12-byte IV;   |
+|    write the IV (12 bytes) + ciphertext to the output file or use a container format.        |
+| 2) Use `Files.readAllBytes` only for small files; otherwise use Cipher(Out/In)Stream.        |
+| 3) Protect `secret.key`: set file permission to 600 (owner read/write) where possible.       |
+| 4) Add try-with-resources for all FileOutputStream/FileInputStream uses.                     |
+| 5) Expose KEY_FILE path via configuration / argument, not hard-coded absolute paths.         |
+
+
+
+
+|                              FLOWCHART — Tool Runtime                                        |
+| Start                                                                                        |
+|   |                                                                                          |
+|   v                                                                                          |
+| Show Menu -> Prompt: 1:GenKey 2:Encrypt 3:Decrypt 4:Exit                                     |
+|   |                                                                                          |
+|   v                                                                                          |
+| Read choice                                                                                  |
+|   +----(1) Generate Key----------------------------------------------------------------------+
+|   |   - KeyGenerator.getInstance("AES")                                                      |
+|   |   - keyGen.init(256)                                                                     |
+|   |   - secretKey = keyGen.generateKey()                                                     |
+|   |   - write secretKey.getEncoded() to KEY_FILE (binary)                                    |
+|   |   - set secure file permissions (recommended)                                            |
+|   |   - Print "Key generated and saved..."                                                   |
+|   |   -> Back to Menu                                                                        |
+|   +----(2) Encrypt File-----------------------------------------------------------------------+
+|   |   - Prompt inputFile, outputFile                                                          |
+|   |   - Read key bytes from KEY_FILE -> SecretKeySpec                                         |
+|   |   - Initialize Cipher (ENCRYPT_MODE) (prefer AES-GCM with random IV)                      |
+|   |   - Read input file bytes (or stream)                                                     |
+|   |   - encrypted = cipher.doFinal(plain)                                                     |
+|   |   - write (IV + encrypted) to outputFile                                                  |
+|   |   - Print success message                                                                 |
+|   |   -> Back to Menu                                                                         |
+|   +----(3) Decrypt File-----------------------------------------------------------------------+
+|   |   - Prompt inputFile, outputFile                                                          |
+|   |   - Read key bytes from KEY_FILE -> SecretKeySpec                                         |
+|   |   - Read IV (if stored) + ciphertext from inputFile                                       |
+|   |   - Initialize Cipher (DECRYPT_MODE) with same IV                                         |
+|   |   - decrypted = cipher.doFinal(ciphertext)                                                |
+|   |   - write decrypted bytes to outputFile                                                   |
+|   |   - Print success message                                                                 |
+|   |   -> Back to Menu                                                                         |
+|   +----(4) Exit ------------------------------------------------------------------------------+
+|        - Print exit message; close scanner; exit program                                      |
+|                                                                                               |
+| End                                                                                           |
++-----------------------------------------------------------------------------------------------+
+| Sequence examples (linear)                                                                    |
+| Generate Key: main -> userChoice -> generateKey -> write KEY_FILE -> return                   |
+| Encrypt: main -> userChoice -> encryptFile -> read KEY_FILE -> build SecretKeySpec -> cipher  |
+|          -> (read input bytes / stream) -> cipher.doFinal / streaming -> write output bytes   |
+| Decrypt: analogous to Encrypt with DECRYPT_MODE                                               |
++----------------------------------------------------------------------------------------------+
+| Minimal safe code checklist before production                                                 |
+| - Use AES-GCM with random IV (12 bytes) and store IV + ciphertext.                            |
+| - Use try-with-resources for all file streams.                                                |
+| - Do not assume KEY_FILE exists: error messages must instruct user to generate key first.     |
+| - Add file existence checks before reading.                                                   |
+| - Avoid loading large files entirely into memory. Use streaming for > few MB.                 |
++----------------------------------------------------------------------------------------------+
